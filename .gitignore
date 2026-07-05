@@ -1,6 +1,14 @@
 # python
 __pycache__/
 *.pyc
+*.py[codz]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+wheels/
 
 # tensor / activation / results artifacts — regenerable data never enters
 # history; only code and the small deterministic selfcheck manifests
@@ -26,7 +34,40 @@ hub/
 .cache/
 huggingface/
 
+# environments / local tooling state (from GitHub Python template)
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+.pdm-python
+.pdm-build/
+__pypackages__/
+.spyderproject
+.spyproject
+.ropeproject
+.pyre/
+.pytype/
+cython_debug/
+.abstra/
+.streamlit/secrets.toml
+tempCodeRunnerFile.py
+.pypirc
+
 # misc local state
 *.log
 *.db
-.ipynb_checkpoints/
+db.sqlite3
+db.sqlite3-journal
+*.pid
