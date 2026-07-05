@@ -37,10 +37,14 @@ collection), then restores the prior implementation and re-asserts the
 additive identity post-restore — restoration was measured bit-exact (V2e/V2f),
 the assertion proves it held on each request.
 
-PERFORMANCE NOTE (prototype): every capture does ``.detach().cpu()`` — fine for
-single prompts. A scaled version should keep tensors on GPU and reduce there
-(norms / cosines / lens on device), moving only the small results to CPU. Not
-built yet.
+PERFORMANCE: the default capture path copies every tensor to CPU (fine for
+single prompts). ``keep_on_device=True`` keeps captures on the GPU and reduces
+there (norms / cosines / geometry / lens on device, only results cross to
+CPU) — guarded by a runtime VRAM headroom check (:func:`ensure_vram_headroom`)
+that REFUSES with a message rather than silently degrading; sibling GPU load
+is variable, so no static budget is assumed. ACCEPTANCE CRITERION carried into
+the device path: all reductions accumulate in fp32 even over fp16-resident
+captures (fp16 sum-of-squares overflows d_model reductions).
 """
 from __future__ import annotations
 
@@ -112,6 +116,26 @@ _MLP_NAMES = ("mlp", "feed_forward", "ffn")
 
 class IdentityViolation(RuntimeError):
     """The additive identity failed where it was asserted at runtime."""
+
+
+class VRAMRefusal(RuntimeError):
+    """On-device capture would exceed available VRAM headroom — refused
+    explicitly, never silently degraded or truncated."""
+
+
+def ensure_vram_headroom(bytes_needed: int, safety: float = 1.3):
+    """Runtime guard for on-device captures: checks ACTUAL free VRAM (sibling
+    GPU load varies, so static budgets are unreliable) and raises VRAMRefusal
+    on shortfall."""
+    if not torch.cuda.is_available():
+        return
+    free, total = torch.cuda.mem_get_info()
+    if bytes_needed * safety > free:
+        raise VRAMRefusal(
+            f"on-device capture needs ~{bytes_needed/1e9:.2f} GB "
+            f"(x{safety:g} safety) but only {free/1e9:.2f} GB of "
+            f"{total/1e9:.2f} GB VRAM is free — refusing; use CPU mode or a "
+            f"shorter prompt")
 
 
 class DLAUnavailable(RuntimeError):
@@ -274,9 +298,11 @@ class ResidualCapture:
     POST-intervention writes (V5c invariant: intervention hooks first).
     """
 
-    def __init__(self, model, interventions=(), tol: float = DEFAULT_TOL):
+    def __init__(self, model, interventions=(), tol: float = DEFAULT_TOL,
+                 keep_on_device: bool = False):
         self.model = model
         self.tol = tol
+        self.keep_on_device = keep_on_device
         layers, layer_path = find_decoder_layers(model)
         self.layers = layers
         self.result = CaptureResult(layer_path=layer_path,
@@ -287,10 +313,16 @@ class ResidualCapture:
         self._handles: list = []
 
     @staticmethod
-    def _grab(t: torch.Tensor) -> torch.Tensor:
-        # Prototype: copy every capture to CPU. Scaled version should stay
-        # on-GPU and reduce there (see module docstring).
-        return t.detach()[0].cpu()
+    def estimate_bytes(n_layers: int, n_tokens: int, d_model: int,
+                       dtype_size: int) -> int:
+        """Resident bytes for one on-device capture (4 states per layer)."""
+        return n_layers * 4 * n_tokens * d_model * dtype_size
+
+    def _grab(self, t: torch.Tensor) -> torch.Tensor:
+        # Default: copy to CPU. On-device mode keeps captures on the GPU;
+        # analyses reduce there in fp32 and only results cross to CPU.
+        t = t.detach()[0]
+        return t if self.keep_on_device else t.cpu()
 
     def __enter__(self):
         r = self.result
@@ -408,7 +440,7 @@ def direction_projection(result: CaptureResult, vec: torch.Tensor,
     component writes, per (layer, token), fp32. Raises ValueError on d_model
     mismatch."""
     d_model = result.resid_post[0].shape[-1]
-    v = vec.detach().float().flatten()
+    v = vec.detach().float().flatten().to(result.resid_post[0].device)
     if v.numel() != d_model:
         raise ValueError(f"direction has dim {v.numel()}, model d_model is {d_model}")
     v = v / (v.norm() + 1e-12)
@@ -530,7 +562,8 @@ def _dla_setup(result: CaptureResult, model, token: int):
     x_final = result.resid_post[-1][token].float()
     eps = getattr(final_norm, "variance_epsilon", getattr(final_norm, "eps", 1e-6))
     rms = torch.rsqrt(x_final.pow(2).mean() + eps)          # frozen scale
-    nw = final_norm.weight.detach().float().cpu()
+    # Follow the capture's device (CPU default, GPU in on-device mode).
+    nw = final_norm.weight.detach().float().to(x_final.device)
     comps = [("embed", result.embed_out[token])]
     comps += [(f"attn_L{L}", result.attn_out[L][token]) for L in range(result.n_layers)]
     comps += [(f"mlp_L{L}", result.mlp_out[L][token]) for L in range(result.n_layers)]
@@ -568,7 +601,7 @@ def dla_attribution(result: CaptureResult, model, token: int,
                     target_id: int) -> dict:
     """Panel: per-component scalar contribution to ONE target logit."""
     final_norm, lm_head, rms, nw, comps = _dla_setup(result, model, token)
-    wu_row = lm_head.weight[target_id].detach().float().cpu()
+    wu_row = lm_head.weight[target_id].detach().float().to(nw.device)
     contribs = [{"component": name,
                  "contribution": float((w.float() * rms * nw) @ wu_row)}
                 for name, w in comps]

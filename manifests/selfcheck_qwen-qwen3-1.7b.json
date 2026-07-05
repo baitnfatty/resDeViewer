@@ -8,8 +8,8 @@
   "torch_version": "2.9.1+rocm7.2.4.git39497456",
   "transformers_version": "5.13.0",
   "code_sha256": {
-    "capture.py": "4873dcf22316baf4f6672cb5a667f42d4649f079be09f1b806db1c3fe88cd365",
-    "selfcheck.py": "b6396deab7107029f3868833b0732247cefb0cc050b20a4a4ab9f6eb7ca4eddc"
+    "capture.py": "abbcbfebf78f8b8de69bcb753dba2ba5b5765e75c97aff5ac4dfa6e3355537e2",
+    "selfcheck.py": "ff63d717bff64ed048b04393ee85063ca1f6a353fde19c36363f9380a7b1e8b3"
   },
   "battery_is_default": true,
   "checks": [
@@ -316,7 +316,7 @@
   ],
   "rule9_inheritance": "This manifest certifies instrumentation only (the decomposition identity on the model above). Any substantive finding produced with this viewer \u2014 e.g. attention-vs-MLP attribution of a signal on some model \u2014 inherits the ACSL Rule 9 adversarial-review requirement at claim time; a passing selfcheck does not validate downstream claims.",
   "shortcuts_taken": [
-    "capture path copies every hooked tensor to CPU (.detach().cpu()); acceptable for single prompts, must move to on-GPU reduction before any batched/scaled use (comment in capture.py)",
+    "default capture path copies every hooked tensor to CPU; an opt-in on-device mode reduces on GPU behind a runtime VRAM headroom guard that refuses on shortfall (never silently degrades); fp32 accumulation is enforced in both paths",
     "prompt battery is 4 fixed hardcoded prompts, not a sampled corpus; the identity under test is structural (forward code-path property), so this is code-path coverage, not a statistical sample",
     "validation is per (model family x transformers version); this run certifies only the model above on the versions above \u2014 rerun selfcheck on any other model before trusting the decomposition",
     "batch size 1 only; batched forward not exercised"

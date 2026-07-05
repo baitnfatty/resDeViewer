@@ -34,10 +34,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from resid_viewer.capture import (  # noqa: E402
     BASIS_NOTES, CaptureResult, DLAUnavailable, IdentityViolation, Intervention,
-    PerHeadRefused, ResidualCapture, capture_attention_pattern, capture_per_head,
-    component_write_norms, cross_layer_cosine, direction_projection,
-    dla_attribution, find_final_norm, logit_lens, write_geometry,
-    build_session_export, write_session_export)
+    PerHeadRefused, ResidualCapture, VRAMRefusal, capture_attention_pattern,
+    capture_per_head, component_write_norms, cross_layer_cosine,
+    direction_projection, dla_attribution, ensure_vram_headroom, find_final_norm,
+    logit_lens, write_geometry, build_session_export, write_session_export)
 from resid_viewer.selfcheck import (  # noqa: E402
     DEFAULT_MODEL, MANIFEST_DIR, IdentityCheckFailed, load_valid_manifest,
     manifest_path_for, validate_model)
@@ -88,6 +88,7 @@ class CaptureReq(BaseModel):
     prompt: str
     chat_template: bool = False
     interventions: list[InterventionReq] = []
+    on_gpu: bool = False   # keep captures on device; guarded, refuses on shortfall
 
 
 class CosineReq(BaseModel):
@@ -304,16 +305,30 @@ def capture(req: CaptureReq):
     ivs = [Intervention(i.layer, i.component, i.scale) for i in req.interventions]
     with S.lock:
         enc = _encode(S.tokenizer, req.prompt, req.chat_template, device)
+        on_gpu = req.on_gpu and device.type == "cuda"
+        if on_gpu:
+            n_cap = 2 if ivs else 1     # baseline doubles the resident cost
+            dt = DTYPES[S.dtype]
+            est = n_cap * ResidualCapture.estimate_bytes(
+                S.model.config.num_hidden_layers,
+                enc["input_ids"].shape[1], S.model.config.hidden_size,
+                torch.tensor([], dtype=dt).element_size())
+            try:
+                ensure_vram_headroom(est)
+            except VRAMRefusal as e:
+                raise HTTPException(507, str(e))
         try:
             baseline = None
             if ivs:
                 # Baseline first (same prompt, no hooks), then the intervened
                 # run. Baseline is a FULL CaptureResult so every analysis —
                 # including ones added later — runs identically on both sides.
-                with torch.no_grad(), ResidualCapture(S.model) as bcap:
+                with torch.no_grad(), ResidualCapture(
+                        S.model, keep_on_device=on_gpu) as bcap:
                     S.model(**enc)
                 baseline = bcap.result
-            with torch.no_grad(), ResidualCapture(S.model, interventions=ivs) as cap:
+            with torch.no_grad(), ResidualCapture(
+                    S.model, interventions=ivs, keep_on_device=on_gpu) as cap:
                 S.model(**enc)
         except (IdentityViolation, ValueError) as e:
             raise HTTPException(422, str(e))

@@ -81,6 +81,7 @@
   <textarea id="prompt">The residual stream of a transformer accumulates writes from attention and MLP blocks at every layer.</textarea>
   <div style="margin-top:6px">
     <label><input type="checkbox" id="chatTmpl"> wrap in chat template</label>
+    <label><input type="checkbox" id="onGpu" title="keep captures on device and reduce there; refuses (HTTP 507) if VRAM headroom is short"> on-GPU</label>
     <label>interventions <input type="text" id="ivSpec" size="22" placeholder="e.g. 14:mlp:0, 3:attn:0.5"
       title="comma-separated layer:component:scale — scale 0 ablates"></label>
     <button id="capBtn" onclick="runCapture()">Run capture</button>
@@ -309,7 +310,8 @@ async function runCapture() {
   try {
     const ivs = parseInterventions();
     const j = await api('/api/capture', {prompt: document.getElementById('prompt').value,
-      chat_template: document.getElementById('chatTmpl').checked, interventions: ivs});
+      chat_template: document.getElementById('chatTmpl').checked, interventions: ivs,
+      on_gpu: document.getElementById('onGpu').checked});
     TOKENS = j.tokens; NLAYERS = j.n_layers; NORMS = j.norms;
     BASE_NORMS = j.baseline_norms; CF = j.counterfactual;
     setCfBanner(j.interventions);

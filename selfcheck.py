@@ -309,9 +309,10 @@ def validate_model(model_id: str, device: str, tol: float = 1e-4,
         "checks": records,
         "rule9_inheritance": RULE9_INHERITANCE,
         "shortcuts_taken": [
-            "capture path copies every hooked tensor to CPU (.detach().cpu()); "
-            "acceptable for single prompts, must move to on-GPU reduction before "
-            "any batched/scaled use (comment in capture.py)",
+            "default capture path copies every hooked tensor to CPU; an opt-in "
+            "on-device mode reduces on GPU behind a runtime VRAM headroom guard "
+            "that refuses on shortfall (never silently degrades); fp32 "
+            "accumulation is enforced in both paths",
             "prompt battery is 4 fixed hardcoded prompts, not a sampled corpus; "
             "the identity under test is structural (forward code-path property), "
             "so this is code-path coverage, not a statistical sample",
