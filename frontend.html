@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Residual-Stream Decomposition Viewer</title>
+<style>
+  body { background:#14161a; color:#d8dce2; font:14px/1.45 system-ui, sans-serif;
+         margin:0; padding:18px 22px 60px; }
+  h1 { font-size:19px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:0 0 8px; color:#9fb6d4; }
+  .sub { color:#7d8590; font-size:12px; margin-bottom:14px; }
+  .panel { background:#1c1f24; border:1px solid #2c313a; border-radius:8px;
+           padding:12px 14px; margin-bottom:14px; }
+  #gate { border-radius:6px; padding:8px 12px; margin-bottom:14px; font-size:13px; }
+  .gate-none { background:#3a2d10; border:1px solid #8a6d1f; color:#e8c766; }
+  .gate-ok   { background:#12301b; border:1px solid #2e7d46; color:#7fd69a; }
+  .gate-bad  { background:#3a1515; border:1px solid #a03030; color:#f09090; }
+  input[type=text], textarea, select {
+    background:#111317; color:#d8dce2; border:1px solid #3a404b;
+    border-radius:5px; padding:6px 8px; font:inherit; }
+  textarea { width:100%; box-sizing:border-box; min-height:64px; }
+  button { background:#2b5fa8; color:#fff; border:none; border-radius:5px;
+           padding:7px 14px; font:inherit; cursor:pointer; }
+  button:disabled { background:#3a404b; cursor:default; }
+  label { margin-right:12px; }
+  pre.basis { white-space:pre-wrap; background:#111317; border:1px solid #2c313a;
+              border-radius:6px; padding:10px 12px; font-size:12px; color:#b9c4d0;
+              margin:6px 0 0; }
+  canvas { border:1px solid #2c313a; border-radius:4px; display:block;
+           image-rendering:pixelated; }
+  .hm-wrap { overflow-x:auto; padding-bottom:4px; }
+  .readout { font-family:ui-monospace, monospace; font-size:12px; color:#9fb6d4;
+             min-height:16px; margin-top:4px; }
+  .row { display:flex; gap:24px; flex-wrap:wrap; }
+  .muted { color:#7d8590; font-size:12px; }
+  #lensWrap { overflow:auto; max-height:520px; border:1px solid #2c313a; border-radius:4px; }
+  table.lens { border-collapse:collapse; font-family:ui-monospace, monospace; font-size:11px; }
+  table.lens td, table.lens th { border:1px solid #262b33; padding:1px 4px;
+                                 white-space:nowrap; cursor:pointer; }
+  table.lens th { background:#181b20; color:#7d8590; position:sticky; cursor:default; }
+  table.lens thead th { top:0; }
+  table.lens tbody th { left:0; }
+  #topk { font-family:ui-monospace, monospace; font-size:12px; margin-top:8px; }
+  .err { color:#f09090; }
+</style>
+</head>
+<body>
+<h1>Residual-Stream Decomposition Viewer</h1>
+<div class="sub">standalone mechanistic-analysis tool &mdash; no ACSL coupling &mdash; port 5001</div>
+
+<div id="gate" class="gate-none">gate: checking&hellip;</div>
+
+<div class="panel">
+  <h2>Model</h2>
+  <input type="text" id="modelId" size="34" value="Qwen/Qwen3-1.7B">
+  <select id="dtype"><option>float32</option><option>float16</option></select>
+  <label><input type="checkbox" id="revalidate"> force re-validate</label>
+  <button id="loadBtn" onclick="loadModel()">Load (gated by fp32 selfcheck)</button>
+  <div id="loadMsg" class="readout"></div>
+  <div class="muted">Loading runs the fp32 identity self-check first unless a valid
+    manifest already certifies this model on the current torch/transformers/code.
+    A failing identity check refuses the model — no workaround.</div>
+</div>
+
+<div class="panel">
+  <h2>Basis &amp; conventions (verbatim from capture.BASIS_NOTES)</h2>
+  <pre class="basis" id="basis">loading&hellip;</pre>
+</div>
+
+<div class="panel">
+  <h2>Capture</h2>
+  <textarea id="prompt">The residual stream of a transformer accumulates writes from attention and MLP blocks at every layer.</textarea>
+  <div style="margin-top:6px">
+    <label><input type="checkbox" id="chatTmpl"> wrap in chat template</label>
+    <button id="capBtn" onclick="runCapture()">Run capture</button>
+    <span id="capMsg" class="readout"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Per-component write norms &nbsp;<span class="muted">‖attn_out‖₂ and ‖mlp_out‖₂ per (layer, token), raw-residual basis, fp32-accumulated</span></h2>
+  <div class="row">
+    <div><div class="muted">attn_out</div><div class="hm-wrap"><canvas id="hmAttn"></canvas></div></div>
+    <div><div class="muted">mlp_out</div><div class="hm-wrap"><canvas id="hmMlp"></canvas></div></div>
+  </div>
+  <div class="readout" id="normReadout">&nbsp;</div>
+</div>
+
+<div class="panel">
+  <h2>Cross-layer cosine &nbsp;<span class="muted">cos between layers' writes at one token position</span></h2>
+  <select id="cosComp"><option>mlp_out</option><option>attn_out</option></select>
+  <label>token index (-1 = last): <input type="text" id="cosTok" size="5" value="-1"></label>
+  <button onclick="runCosine()">Compute</button>
+  <div class="hm-wrap" style="margin-top:8px"><canvas id="hmCos"></canvas></div>
+  <div class="readout" id="cosReadout">&nbsp;</div>
+</div>
+
+<div class="panel">
+  <h2>Logit lens &nbsp;<span class="muted">top-1 decode via the model's real final norm + lm_head, fp32 softmax; click a cell for top-k</span></h2>
+  <select id="lensState">
+    <option value="resid_post">resid_post (captured)</option>
+    <option value="resid_mid">resid_mid (reconstructed: resid_pre + attn_out)</option>
+    <option value="resid_pre">resid_pre (captured; = prior resid_post, validated)</option>
+  </select>
+  <button onclick="runLens()">Decode grid</button>
+  <span id="lensMsg" class="readout"></span>
+  <div id="lensWrap" style="margin-top:8px"></div>
+  <div id="topk"></div>
+</div>
+
+<script>
+let TOKENS = [], NLAYERS = 0;
+
+async function api(path, body) {
+  const opts = body ? {method:'POST', headers:{'Content-Type':'application/json'},
+                       body: JSON.stringify(body)} : {};
+  const r = await fetch(path, opts);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+
+function setGate(g, loaded) {
+  const el = document.getElementById('gate');
+  if (!g) { el.className = 'gate-none';
+    el.textContent = 'gate: no model validated yet — load a model to run the fp32 selfcheck'; return; }
+  el.className = g.all_pass ? 'gate-ok' : 'gate-bad';
+  el.textContent = `gate: selfcheck PASS — ${g.model} @${(g.model_commit_hash||'?').slice(0,8)}` +
+    ` | A-identity max abs diff ${g.A_max_abs_diff} (tol ${g.tol}) over ${g.n_prompts} prompts` +
+    ` | torch ${g.torch_version} / transformers ${g.transformers_version}` +
+    (loaded ? '' : ' | (model not currently loaded)');
+}
+
+async function refresh() {
+  const s = await api('/api/status');
+  document.getElementById('basis').textContent = s.basis_notes;
+  setGate(s.gate, s.model_loaded);
+}
+
+async function loadModel() {
+  const btn = document.getElementById('loadBtn'), msg = document.getElementById('loadMsg');
+  btn.disabled = true;
+  msg.className = 'readout'; msg.textContent = 'loading (fp32 selfcheck may run first — can take a couple of minutes)…';
+  try {
+    const j = await api('/api/load', {model: document.getElementById('modelId').value.trim(),
+      dtype: document.getElementById('dtype').value,
+      revalidate: document.getElementById('revalidate').checked});
+    msg.textContent = `loaded in ${j.dtype}`;
+    await refresh();
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+  btn.disabled = false;
+}
+
+// ---- heatmaps ------------------------------------------------------------
+function viridis(v) { // v in [0,1] — compact 5-stop approximation
+  const s = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+  const x = Math.max(0, Math.min(1, v)) * (s.length - 1), i = Math.min(s.length-2, Math.floor(x)), f = x - i;
+  return s[i].map((c,k) => Math.round(c + f*(s[i+1][k]-c)));
+}
+function diverging(v) { // v in [-1,1]: blue-white-red
+  const t = Math.max(-1, Math.min(1, v));
+  return t < 0 ? [Math.round(255*(1+t)), Math.round(255*(1+t)), 255]
+               : [255, Math.round(255*(1-t)), Math.round(255*(1-t))];
+}
+function drawHM(canvasId, data, colorFn, readoutId, labelFn) {
+  const cv = document.getElementById(canvasId), L = data.length, T = data[0].length;
+  const cell = Math.max(3, Math.min(14, Math.floor(900 / T)));
+  cv.width = T * cell; cv.height = L * cell;
+  const ctx = cv.getContext('2d');
+  for (let l = 0; l < L; l++) for (let t = 0; t < T; t++) {
+    const [r,g,b] = colorFn(data[l][t]);
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    // row 0 at bottom = layer 0 at bottom, matching "stream flows upward"
+    ctx.fillRect(t*cell, (L-1-l)*cell, cell, cell);
+  }
+  cv.onmousemove = (e) => {
+    const rect = cv.getBoundingClientRect();
+    const t = Math.floor((e.clientX-rect.left)/cell), l = L-1-Math.floor((e.clientY-rect.top)/cell);
+    if (l>=0 && l<L && t>=0 && t<T)
+      document.getElementById(readoutId).textContent = labelFn(l, t, data[l][t]);
+  };
+}
+
+async function runCapture() {
+  const msg = document.getElementById('capMsg');
+  msg.className = 'readout'; msg.textContent = 'capturing…';
+  try {
+    const j = await api('/api/capture', {prompt: document.getElementById('prompt').value,
+      chat_template: document.getElementById('chatTmpl').checked});
+    TOKENS = j.tokens; NLAYERS = j.n_layers;
+    msg.textContent = `${j.n_layers} layers × ${j.tokens.length} tokens`;
+    const mx = Math.max(...j.norms.attn_out.flat(), ...j.norms.mlp_out.flat());
+    const lbl = (name) => (l,t,v) =>
+      `${name} L${l} tok${t} ${JSON.stringify(TOKENS[t])}  ‖write‖₂ = ${v.toFixed(3)}`;
+    drawHM('hmAttn', j.norms.attn_out, v => viridis(v/mx), 'normReadout', lbl('attn_out'));
+    drawHM('hmMlp',  j.norms.mlp_out,  v => viridis(v/mx), 'normReadout', lbl('mlp_out'));
+    document.getElementById('lensWrap').innerHTML = '';
+    document.getElementById('topk').innerHTML = '';
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
+async function runCosine() {
+  const rd = document.getElementById('cosReadout');
+  try {
+    const j = await api('/api/cosine', {component: document.getElementById('cosComp').value,
+      token: parseInt(document.getElementById('cosTok').value, 10)});
+    drawHM('hmCos', j.matrix, diverging, 'cosReadout',
+      (l,t,v) => `cos(${j.component} L${l}, L${t}) @ token ${j.token} = ${v.toFixed(4)}`);
+    rd.textContent = 'hover for values';
+  } catch (e) { rd.className = 'readout err'; rd.textContent = e.message; }
+}
+
+async function runLens() {
+  const msg = document.getElementById('lensMsg');
+  msg.className = 'readout'; msg.textContent = 'decoding all layers…';
+  const state = document.getElementById('lensState').value;
+  try {
+    const j = await api('/api/lens_grid', {state});
+    msg.textContent = `state = ${j.state}`;
+    let h = '<table class="lens"><thead><tr><th>layer\\tok</th>';
+    TOKENS.forEach((tk,i) => h += `<th title="${esc(tk)}">${i}</th>`);
+    h += '</tr></thead><tbody>';
+    for (let l = j.grid.length - 1; l >= 0; l--) {   // top row = last layer
+      h += `<tr><th>L${l}</th>`;
+      j.grid[l].forEach((c,t) => {
+        h += `<td style="background:rgba(43,95,168,${(0.15+0.85*c.p).toFixed(3)})"` +
+             ` onclick="topk('${state}',${l},${t})" title="p=${c.p}">${esc(c.t)}</td>`;
+      });
+      h += '</tr>';
+    }
+    document.getElementById('lensWrap').innerHTML = h + '</tbody></table>';
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
+async function topk(state, layer, token) {
+  const el = document.getElementById('topk');
+  try {
+    const j = await api('/api/lens_topk', {state, layer, token, top_k: 10});
+    el.innerHTML = `<b>top-10 — ${state} L${layer}, token ${token} ` +
+      `${esc(JSON.stringify(TOKENS[token]))}</b><br>` +
+      j.topk.map(x => `${x.p.toFixed(5)}  ${esc(x.t)}`).join('<br>');
+  } catch (e) { el.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+refresh().catch(e => { document.getElementById('gate').textContent = 'gate: ' + e.message; });
+</script>
+</body>
+</html>
