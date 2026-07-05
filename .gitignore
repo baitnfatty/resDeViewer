@@ -1,2 +1,32 @@
+# python
 __pycache__/
 *.pyc
+
+# tensor / activation / results artifacts — regenerable data never enters
+# history; only code and the small deterministic selfcheck manifests
+# (manifests/*.json) are tracked
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.gguf
+*.h5
+*.parquet
+*.arrow
+activations/
+captures/
+
+# model weights / HF cache, in case --model ever points at or caches into this tree
+models/
+models--*/
+hub/
+.cache/
+huggingface/
+
+# misc local state
+*.log
+*.db
+.ipynb_checkpoints/
