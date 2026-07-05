@@ -8,8 +8,8 @@
   "torch_version": "2.9.1+rocm7.2.4.git39497456",
   "transformers_version": "5.13.0",
   "code_sha256": {
-    "capture.py": "bdf0251a879aea5f8a573df244eb1e6aef7d2be9052dac8393cb2c38e0ec0aa2",
-    "selfcheck.py": "a3352a707fa480718a2fa52634a2229f3b20db7e48dc0a60df390b72671ab4d0"
+    "capture.py": "4873dcf22316baf4f6672cb5a667f42d4649f079be09f1b806db1c3fe88cd365",
+    "selfcheck.py": "b6396deab7107029f3868833b0732247cefb0cc050b20a4a4ab9f6eb7ca4eddc"
   },
   "battery_is_default": true,
   "checks": [
@@ -58,6 +58,34 @@
       "B_chaining_max_abs_diff": 0.0,
       "C_embed_stream_max_abs_diff": 0.0,
       "D_lens_anchor_max_abs_diff": 0.0,
+      "E_per_head": {
+        "layer": 14,
+        "sum_max_abs_diff": 1.3828277587890625e-05,
+        "n_heads": 16,
+        "head_dim": 128,
+        "pass": true
+      },
+      "F_dla": {
+        "max_abs_diff": 6.29425048828125e-05,
+        "tol": 0.0011992700937630955,
+        "tol_inputs": {
+          "eps": 1.19e-07,
+          "max_abs_logit": 24.639177322387695,
+          "n_components": 57,
+          "d_model": 2048,
+          "C": 4.0
+        },
+        "pass": true,
+        "token": -1
+      },
+      "G_attn_pattern": {
+        "layer": 14,
+        "eager_identity_max_diff": 0.0,
+        "row_sum_max_dev": 2.384185791015625e-07,
+        "post_restore_identity_max_diff": 0.0,
+        "restored_impl": "sdpa",
+        "pass": true
+      },
       "all_pass": true
     },
     {
@@ -105,6 +133,34 @@
       "B_chaining_max_abs_diff": 0.0,
       "C_embed_stream_max_abs_diff": 0.0,
       "D_lens_anchor_max_abs_diff": 0.0,
+      "E_per_head": {
+        "layer": 14,
+        "sum_max_abs_diff": 6.866455078125e-05,
+        "n_heads": 16,
+        "head_dim": 128,
+        "pass": true
+      },
+      "F_dla": {
+        "max_abs_diff": 4.4345855712890625e-05,
+        "tol": 0.0013288722455645561,
+        "tol_inputs": {
+          "eps": 1.19e-07,
+          "max_abs_logit": 27.30187225341797,
+          "n_components": 57,
+          "d_model": 2048,
+          "C": 4.0
+        },
+        "pass": true,
+        "token": -1
+      },
+      "G_attn_pattern": {
+        "layer": 14,
+        "eager_identity_max_diff": 0.0,
+        "row_sum_max_dev": 7.748603820800781e-07,
+        "post_restore_identity_max_diff": 0.0,
+        "restored_impl": "sdpa",
+        "pass": true
+      },
       "all_pass": true
     },
     {
@@ -152,6 +208,34 @@
       "B_chaining_max_abs_diff": 0.0,
       "C_embed_stream_max_abs_diff": 0.0,
       "D_lens_anchor_max_abs_diff": 0.0,
+      "E_per_head": {
+        "layer": 14,
+        "sum_max_abs_diff": 8.392333984375e-05,
+        "n_heads": 16,
+        "head_dim": 128,
+        "pass": true
+      },
+      "F_dla": {
+        "max_abs_diff": 5.14984130859375e-05,
+        "tol": 0.0014685586258293326,
+        "tol_inputs": {
+          "eps": 1.19e-07,
+          "max_abs_logit": 30.171749114990234,
+          "n_components": 57,
+          "d_model": 2048,
+          "C": 4.0
+        },
+        "pass": true,
+        "token": -1
+      },
+      "G_attn_pattern": {
+        "layer": 14,
+        "eager_identity_max_diff": 0.0,
+        "row_sum_max_dev": 2.384185791015625e-07,
+        "post_restore_identity_max_diff": 0.0,
+        "restored_impl": "sdpa",
+        "pass": true
+      },
       "all_pass": true
     },
     {
@@ -199,6 +283,34 @@
       "B_chaining_max_abs_diff": 0.0,
       "C_embed_stream_max_abs_diff": 0.0,
       "D_lens_anchor_max_abs_diff": 0.0,
+      "E_per_head": {
+        "layer": 14,
+        "sum_max_abs_diff": 1.71661376953125e-05,
+        "n_heads": 16,
+        "head_dim": 128,
+        "pass": true
+      },
+      "F_dla": {
+        "max_abs_diff": 4.291534423828125e-05,
+        "tol": 0.0010656054896879337,
+        "tol_inputs": {
+          "eps": 1.19e-07,
+          "max_abs_logit": 21.89301872253418,
+          "n_components": 57,
+          "d_model": 2048,
+          "C": 4.0
+        },
+        "pass": true,
+        "token": -1
+      },
+      "G_attn_pattern": {
+        "layer": 14,
+        "eager_identity_max_diff": 0.0,
+        "row_sum_max_dev": 2.384185791015625e-07,
+        "post_restore_identity_max_diff": 0.0,
+        "restored_impl": "sdpa",
+        "pass": true
+      },
       "all_pass": true
     }
   ],

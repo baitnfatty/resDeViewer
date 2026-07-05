@@ -56,7 +56,9 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from resid_viewer.capture import ResidualCapture, find_final_norm  # noqa: E402
+from resid_viewer.capture import (  # noqa: E402
+    DLAUnavailable, IdentityViolation, ResidualCapture,
+    capture_attention_pattern, capture_per_head, dla_check, find_final_norm)
 
 DEFAULT_MODEL = "Qwen/Qwen3-1.7B"
 MANIFEST_DIR = Path(__file__).resolve().parent / "manifests"
@@ -196,10 +198,51 @@ def run_checks(model, tokenizer, name: str, prompt: str, use_chat_template: bool
         lens_logits = lm_head(final_norm(r.resid_post[-1].to(device))).float().cpu()
     d_max = max_abs(lens_logits, out.logits[0].float().cpu())
 
-    ok2 = (b_max <= tol and d_max <= tol and (c_max is None or c_max <= tol))
+    # E. per-head sum == attn_out at the middle layer (one extra forward).
+    #    capture_per_head raises IdentityViolation above tol — record either way.
+    mid = r.n_layers // 2
+    try:
+        ph = capture_per_head(model, enc, mid, tol=tol)
+        e_rec = {"layer": mid, "sum_max_abs_diff": ph["sum_max_abs_diff"],
+                 "n_heads": ph["n_heads"], "head_dim": ph["head_dim"],
+                 "pass": True}
+    except IdentityViolation as e:
+        e_rec = {"layer": mid, "pass": False, "error": str(e)}
+
+    # F. frozen-RMS DLA additivity, tolerance derived from the fp32 precision
+    #    model (never from the measurement). Explicit recorded SKIP when the
+    #    embedding anchor is missing — the DLA panel refuses in that case.
+    try:
+        f_rec = dla_check(r, model, token=-1)
+    except DLAUnavailable as e:
+        f_rec = {"skipped_no_embed": True, "pass": None, "reason": str(e)}
+
+    # G. attention-pattern path: identity under the eager forward, per-layer
+    #    map rows sum to 1, and the post-restore identity probe (V2f).
+    try:
+        pat = capture_attention_pattern(model, enc, mid, tol=tol)
+        g_rec = {"layer": mid,
+                 "eager_identity_max_diff": pat["eager_identity_max_diff"],
+                 "row_sum_max_dev": pat["row_sum_max_dev"],
+                 "post_restore_identity_max_diff": pat["post_restore_identity_max_diff"],
+                 "restored_impl": pat["restored_impl"],
+                 "pass": (pat["eager_identity_max_diff"] <= tol
+                          and pat["row_sum_max_dev"] <= tol
+                          and pat["post_restore_identity_max_diff"] <= tol)}
+    except (IdentityViolation, RuntimeError) as e:
+        g_rec = {"layer": mid, "pass": False, "error": str(e)}
+
+    ok2 = (b_max <= tol and d_max <= tol and (c_max is None or c_max <= tol)
+           and e_rec["pass"] and (f_rec["pass"] is not False) and g_rec["pass"])
+    e_str = f"{e_rec['sum_max_abs_diff']:.2e}" if e_rec["pass"] else "FAIL"
+    f_str = ("skip" if f_rec.get("skipped_no_embed")
+             else f"{f_rec['max_abs_diff']:.2e}")
+    g_str = (f"{g_rec['row_sum_max_dev']:.2e}" if g_rec["pass"]
+             else "FAIL")
     print(f"[{name}] tokens={n_tok} chat_template={use_chat_template}  "
           f"A={a_max:.2e} B={b_max:.2e} "
-          f"C={'skipped' if c_max is None else f'{c_max:.2e}'} D={d_max:.2e}  "
+          f"C={'skipped' if c_max is None else f'{c_max:.2e}'} D={d_max:.2e} "
+          f"E={e_str} F={f_str} G={g_str}  "
           f"{'PASS' if ok2 else 'SECONDARY FAIL'}")
     return {
         "prompt_name": name, "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
@@ -212,6 +255,9 @@ def run_checks(model, tokenizer, name: str, prompt: str, use_chat_template: bool
         "B_chaining_max_abs_diff": b_max,
         "C_embed_stream_max_abs_diff": c_max,
         "D_lens_anchor_max_abs_diff": d_max,
+        "E_per_head": e_rec,
+        "F_dla": f_rec,
+        "G_attn_pattern": g_rec,
         "all_pass": ok2,
     }
 

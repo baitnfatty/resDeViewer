@@ -15,6 +15,8 @@
   .gate-none { background:#3a2d10; border:1px solid #8a6d1f; color:#e8c766; }
   .gate-ok   { background:#12301b; border:1px solid #2e7d46; color:#7fd69a; }
   .gate-bad  { background:#3a1515; border:1px solid #a03030; color:#f09090; }
+  #cfBanner { display:none; border-radius:6px; padding:8px 12px; margin-bottom:14px;
+              background:#3a1c33; border:1px solid #a04090; color:#f0a0e0; font-size:13px; }
   input[type=text], textarea, select {
     background:#111317; color:#d8dce2; border:1px solid #3a404b;
     border-radius:5px; padding:6px 8px; font:inherit; }
@@ -33,6 +35,7 @@
              min-height:16px; margin-top:4px; }
   .row { display:flex; gap:24px; flex-wrap:wrap; }
   .muted { color:#7d8590; font-size:12px; }
+  .cf { color:#f0a0e0; font-weight:600; }
   #lensWrap { overflow:auto; max-height:520px; border:1px solid #2c313a; border-radius:4px; }
   table.lens { border-collapse:collapse; font-family:ui-monospace, monospace; font-size:11px; }
   table.lens td, table.lens th { border:1px solid #262b33; padding:1px 4px;
@@ -40,7 +43,7 @@
   table.lens th { background:#181b20; color:#7d8590; position:sticky; cursor:default; }
   table.lens thead th { top:0; }
   table.lens tbody th { left:0; }
-  #topk { font-family:ui-monospace, monospace; font-size:12px; margin-top:8px; }
+  #topk, .mono { font-family:ui-monospace, monospace; font-size:12px; margin-top:8px; }
   .err { color:#f09090; }
 </style>
 </head>
@@ -49,6 +52,7 @@
 <div class="sub">standalone mechanistic-analysis tool &mdash; no ACSL coupling &mdash; port 5001</div>
 
 <div id="gate" class="gate-none">gate: checking&hellip;</div>
+<div id="cfBanner"></div>
 
 <div class="panel">
   <h2>Certified models &nbsp;<span class="muted">every selfcheck manifest on disk, validity re-checked live against current versions/code</span></h2>
@@ -77,18 +81,40 @@
   <textarea id="prompt">The residual stream of a transformer accumulates writes from attention and MLP blocks at every layer.</textarea>
   <div style="margin-top:6px">
     <label><input type="checkbox" id="chatTmpl"> wrap in chat template</label>
+    <label>interventions <input type="text" id="ivSpec" size="22" placeholder="e.g. 14:mlp:0, 3:attn:0.5"
+      title="comma-separated layer:component:scale — scale 0 ablates"></label>
     <button id="capBtn" onclick="runCapture()">Run capture</button>
+    <button onclick="doExport(false)">Export session</button>
+    <label><input type="checkbox" id="exportRaw"> + raw .npz</label>
     <span id="capMsg" class="readout"></span>
   </div>
 </div>
 
 <div class="panel">
-  <h2>Per-component write norms &nbsp;<span class="muted">‖attn_out‖₂ and ‖mlp_out‖₂ per (layer, token), raw-residual basis, fp32-accumulated</span></h2>
-  <div class="row">
+  <h2>Per-component write norms &nbsp;<span class="muted">‖attn_out‖₂ / ‖mlp_out‖₂ per (layer, token), raw-residual basis, fp32-accumulated</span></h2>
+  <select id="normView" onchange="drawNorms()">
+    <option value="current">current</option>
+  </select>
+  <div class="row" style="margin-top:8px">
     <div><div class="muted">attn_out</div><div class="hm-wrap"><canvas id="hmAttn"></canvas></div></div>
     <div><div class="muted">mlp_out</div><div class="hm-wrap"><canvas id="hmMlp"></canvas></div></div>
   </div>
   <div class="readout" id="normReadout">&nbsp;</div>
+</div>
+
+<div class="panel">
+  <h2>Write geometry &nbsp;<span class="muted">relative norms + write angles; erasure shows as negative cos(write, resid_pre)</span></h2>
+  <select id="geoMetric">
+    <option value="rel_norm_attn">‖attn‖/‖resid_pre‖</option>
+    <option value="rel_norm_mlp">‖mlp‖/‖resid_pre‖</option>
+    <option value="cos_attn_resid">cos(attn_out, resid_pre)</option>
+    <option value="cos_mlp_resid">cos(mlp_out, resid_pre)</option>
+    <option value="cos_attn_mlp">cos(attn_out, mlp_out)</option>
+  </select>
+  <select id="geoWhich"><option value="current">current</option><option value="baseline">baseline</option></select>
+  <button onclick="runGeometry()">Compute</button>
+  <div class="hm-wrap" style="margin-top:8px"><canvas id="hmGeo"></canvas></div>
+  <div class="readout" id="geoReadout">&nbsp;</div>
 </div>
 
 <div class="panel">
@@ -101,12 +127,57 @@
 </div>
 
 <div class="panel">
+  <h2>Per-head attribution &nbsp;<span class="muted">one layer, on demand — o_proj input × head column blocks; refuses if an intervention targets this layer's attn (decomposition premise broken)</span></h2>
+  <label>layer <input type="text" id="phLayer" size="4" value="0"></label>
+  <button onclick="runHeads()">Decompose heads</button>
+  <span id="phMsg" class="readout"></span>
+  <div class="hm-wrap" style="margin-top:8px"><canvas id="hmHeads"></canvas></div>
+  <div class="readout" id="phReadout">&nbsp;</div>
+  <div id="phLens" class="mono"></div>
+</div>
+
+<div class="panel">
+  <h2>Direct logit attribution &nbsp;<span class="muted">frozen-RMS linearization — exactly additive at the realized state (see basis notes); gated on check F</span></h2>
+  <label>position (-1 = last) <input type="text" id="dlaTok" size="4" value="-1"></label>
+  <label>target token <input type="text" id="dlaTarget" size="12" placeholder="e.g. ' Paris'"></label>
+  <button onclick="runDLA()">Attribute</button>
+  <span id="dlaMsg" class="readout"></span>
+  <div id="dlaOut" class="mono"></div>
+</div>
+
+<div class="panel">
+  <h2>Direction projection &nbsp;<span class="muted">dot(state, v̂) — paste a d_model JSON array; vectors arrive as data, never a path</span></h2>
+  <textarea id="projVec" placeholder="[0.01, -0.3, ...] (length must equal d_model)"></textarea>
+  <div style="margin-top:6px">
+    <select id="projState"><option>resid_post</option><option>resid_mid</option><option>resid_pre</option></select>
+    <select id="projMetric"><option value="state_proj">state projection</option>
+      <option value="attn_proj">attn_out projection</option><option value="mlp_proj">mlp_out projection</option></select>
+    <select id="projWhich"><option value="current">current</option><option value="baseline">baseline</option></select>
+    <button onclick="runProject()">Project</button>
+    <span id="projMsg" class="readout"></span>
+  </div>
+  <div class="hm-wrap" style="margin-top:8px"><canvas id="hmProj"></canvas></div>
+  <div class="readout" id="projReadout">&nbsp;</div>
+</div>
+
+<div class="panel">
+  <h2>Attention pattern &nbsp;<span class="muted">QK map from a dedicated eager forward (sdpa exposes no weights); sdpa restored + identity re-asserted after every request</span></h2>
+  <label>layer <input type="text" id="patLayer" size="4" value="0"></label>
+  <label>head <input type="text" id="patHead" size="4" value="0"></label>
+  <button onclick="runPattern()">Fetch map</button>
+  <span id="patMsg" class="readout"></span>
+  <div class="hm-wrap" style="margin-top:8px"><canvas id="hmPat"></canvas></div>
+  <div class="readout" id="patReadout">&nbsp;</div>
+</div>
+
+<div class="panel">
   <h2>Logit lens &nbsp;<span class="muted">top-1 decode via the model's real final norm + lm_head, fp32 softmax; click a cell for top-k</span></h2>
   <select id="lensState">
     <option value="resid_post">resid_post (captured)</option>
     <option value="resid_mid">resid_mid (reconstructed: resid_pre + attn_out)</option>
     <option value="resid_pre">resid_pre (captured; = prior resid_post, validated)</option>
   </select>
+  <select id="lensWhich"><option value="current">current</option><option value="baseline">baseline</option></select>
   <button onclick="runLens()">Decode grid</button>
   <span id="lensMsg" class="readout"></span>
   <div id="lensWrap" style="margin-top:8px"></div>
@@ -114,7 +185,7 @@
 </div>
 
 <script>
-let TOKENS = [], NLAYERS = 0;
+let TOKENS = [], NLAYERS = 0, NORMS = null, BASE_NORMS = null, CF = false;
 
 async function api(path, body) {
   const opts = body ? {method:'POST', headers:{'Content-Type':'application/json'},
@@ -124,6 +195,8 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.detail || r.statusText);
   return j;
 }
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function cfTag(j) { return j.counterfactual ? ' <span class="cf">[counterfactual]</span>' : ''; }
 
 function setGate(g, loaded) {
   const el = document.getElementById('gate');
@@ -131,15 +204,26 @@ function setGate(g, loaded) {
     el.textContent = 'gate: no model validated yet — load a model to run the fp32 selfcheck'; return; }
   el.className = g.all_pass ? 'gate-ok' : 'gate-bad';
   el.textContent = `gate: selfcheck PASS — ${g.model} @${(g.model_commit_hash||'?').slice(0,8)}` +
-    ` | A-identity max abs diff ${g.A_max_abs_diff} (tol ${g.tol}) over ${g.n_prompts} prompts` +
+    ` | A max ${g.A_max_abs_diff} (tol ${g.tol}) over ${g.n_prompts} prompts` +
+    ` | E:${g.E_pass?'✓':'✗'} F:${g.F_dla_certified?'✓':(g.F_skipped_no_embed?'skip':'✗')} G:${g.G_pass?'✓':'✗'}` +
     ` | torch ${g.torch_version} / transformers ${g.transformers_version}` +
     (loaded ? '' : ' | (model not currently loaded)');
+}
+
+function setCfBanner(interventions) {
+  const el = document.getElementById('cfBanner');
+  if (!interventions || !interventions.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = '<b>COUNTERFACTUAL MODE</b> — active interventions: ' +
+    interventions.map(i => `L${i.layer}.${i.component}×${i.scale}`).join(', ') +
+    ' — every panel shows a modified forward; baseline available in panel selectors.';
 }
 
 async function refresh() {
   const s = await api('/api/status');
   document.getElementById('basis').textContent = s.basis_notes;
   setGate(s.gate, s.model_loaded);
+  setCfBanner(s.interventions);
   loadManifests();
 }
 
@@ -177,53 +261,105 @@ async function loadModel() {
 }
 
 // ---- heatmaps ------------------------------------------------------------
-function viridis(v) { // v in [0,1] — compact 5-stop approximation
+function viridis(v) {
   const s = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
   const x = Math.max(0, Math.min(1, v)) * (s.length - 1), i = Math.min(s.length-2, Math.floor(x)), f = x - i;
   return s[i].map((c,k) => Math.round(c + f*(s[i+1][k]-c)));
 }
-function diverging(v) { // v in [-1,1]: blue-white-red
+function diverging(v) {
   const t = Math.max(-1, Math.min(1, v));
   return t < 0 ? [Math.round(255*(1+t)), Math.round(255*(1+t)), 255]
                : [255, Math.round(255*(1-t)), Math.round(255*(1-t))];
 }
-function drawHM(canvasId, data, colorFn, readoutId, labelFn) {
-  const cv = document.getElementById(canvasId), L = data.length, T = data[0].length;
-  const cell = Math.max(3, Math.min(14, Math.floor(900 / T)));
-  cv.width = T * cell; cv.height = L * cell;
+// flip=true draws row 0 at the bottom (layers grow upward); flip=false draws
+// row 0 at the top (attention maps, head grids).
+function drawHM(canvasId, data, colorFn, readoutId, labelFn, flip=true) {
+  const cv = document.getElementById(canvasId), R = data.length, C = data[0].length;
+  const cell = Math.max(3, Math.min(14, Math.floor(900 / C)));
+  cv.width = C * cell; cv.height = R * cell;
   const ctx = cv.getContext('2d');
-  for (let l = 0; l < L; l++) for (let t = 0; t < T; t++) {
-    const [r,g,b] = colorFn(data[l][t]);
-    ctx.fillStyle = `rgb(${r},${g},${b})`;
-    // row 0 at bottom = layer 0 at bottom, matching "stream flows upward"
-    ctx.fillRect(t*cell, (L-1-l)*cell, cell, cell);
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+    const [rr,gg,bb] = colorFn(data[r][c]);
+    ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+    ctx.fillRect(c*cell, (flip ? R-1-r : r)*cell, cell, cell);
   }
   cv.onmousemove = (e) => {
     const rect = cv.getBoundingClientRect();
-    const t = Math.floor((e.clientX-rect.left)/cell), l = L-1-Math.floor((e.clientY-rect.top)/cell);
-    if (l>=0 && l<L && t>=0 && t<T)
-      document.getElementById(readoutId).textContent = labelFn(l, t, data[l][t]);
+    const c = Math.floor((e.clientX-rect.left)/cell);
+    let r = Math.floor((e.clientY-rect.top)/cell);
+    if (flip) r = R-1-r;
+    if (r>=0 && r<R && c>=0 && c<C)
+      document.getElementById(readoutId).textContent = labelFn(r, c, data[r][c]);
   };
+}
+
+// ---- capture + norms -------------------------------------------------------
+function parseInterventions() {
+  const raw = document.getElementById('ivSpec').value.trim();
+  if (!raw) return [];
+  return raw.split(',').map(s => {
+    const [l, comp, sc] = s.trim().split(':');
+    return {layer: parseInt(l,10), component: comp, scale: sc === undefined ? 0 : parseFloat(sc)};
+  });
 }
 
 async function runCapture() {
   const msg = document.getElementById('capMsg');
   msg.className = 'readout'; msg.textContent = 'capturing…';
   try {
+    const ivs = parseInterventions();
     const j = await api('/api/capture', {prompt: document.getElementById('prompt').value,
-      chat_template: document.getElementById('chatTmpl').checked});
-    TOKENS = j.tokens; NLAYERS = j.n_layers;
-    msg.textContent = `${j.n_layers} layers × ${j.tokens.length} tokens`;
-    const mx = Math.max(...j.norms.attn_out.flat(), ...j.norms.mlp_out.flat());
-    const lbl = (name) => (l,t,v) =>
-      `${name} L${l} tok${t} ${JSON.stringify(TOKENS[t])}  ‖write‖₂ = ${v.toFixed(3)}`;
-    drawHM('hmAttn', j.norms.attn_out, v => viridis(v/mx), 'normReadout', lbl('attn_out'));
-    drawHM('hmMlp',  j.norms.mlp_out,  v => viridis(v/mx), 'normReadout', lbl('mlp_out'));
+      chat_template: document.getElementById('chatTmpl').checked, interventions: ivs});
+    TOKENS = j.tokens; NLAYERS = j.n_layers; NORMS = j.norms;
+    BASE_NORMS = j.baseline_norms; CF = j.counterfactual;
+    setCfBanner(j.interventions);
+    msg.innerHTML = `${j.n_layers} layers × ${j.tokens.length} tokens` + cfTag(j) +
+      (j.identity_max_diff !== null ? ` <span class="muted">(intervened identity re-asserted: max ${j.identity_max_diff.toExponential(1)})</span>` : '');
+    const sel = document.getElementById('normView');
+    sel.innerHTML = '<option value="current">current' + (CF ? ' (counterfactual)' : '') + '</option>' +
+      (BASE_NORMS ? '<option value="baseline">baseline</option><option value="delta">Δ current − baseline</option>' : '');
+    drawNorms();
     document.getElementById('lensWrap').innerHTML = '';
     document.getElementById('topk').innerHTML = '';
   } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
 }
 
+function drawNorms() {
+  if (!NORMS) return;
+  const view = document.getElementById('normView').value;
+  let attn = NORMS.attn_out, mlp = NORMS.mlp_out, cmap, lblSuffix = '';
+  if (view === 'baseline') { attn = BASE_NORMS.attn_out; mlp = BASE_NORMS.mlp_out; }
+  if (view === 'delta') {
+    attn = NORMS.attn_out.map((row,l) => row.map((v,t) => v - BASE_NORMS.attn_out[l][t]));
+    mlp  = NORMS.mlp_out.map((row,l) => row.map((v,t) => v - BASE_NORMS.mlp_out[l][t]));
+    const mx = Math.max(1e-9, ...attn.flat().map(Math.abs), ...mlp.flat().map(Math.abs));
+    cmap = v => diverging(v/mx); lblSuffix = ' (Δ)';
+  } else {
+    const mx = Math.max(...attn.flat(), ...mlp.flat());
+    cmap = v => viridis(v/mx);
+  }
+  const lbl = (name) => (l,t,v) =>
+    `${name}${lblSuffix} L${l} tok${t} ${JSON.stringify(TOKENS[t])} = ${v.toFixed(4)}`;
+  drawHM('hmAttn', attn, cmap, 'normReadout', lbl('attn_out'));
+  drawHM('hmMlp',  mlp,  cmap, 'normReadout', lbl('mlp_out'));
+}
+
+// ---- geometry --------------------------------------------------------------
+async function runGeometry() {
+  const rd = document.getElementById('geoReadout');
+  try {
+    const j = await api('/api/geometry', {which: document.getElementById('geoWhich').value});
+    const metric = document.getElementById('geoMetric').value;
+    const data = j.geometry[metric];
+    const isCos = metric.startsWith('cos');
+    const mx = isCos ? 1 : Math.max(1e-9, ...data.flat());
+    drawHM('hmGeo', data, v => isCos ? diverging(v) : viridis(v/mx), 'geoReadout',
+      (l,t,v) => `${metric} L${l} tok${t} ${JSON.stringify(TOKENS[t])} = ${v.toFixed(4)}`);
+    rd.innerHTML = 'hover for values' + cfTag(j);
+  } catch (e) { rd.className = 'readout err'; rd.textContent = e.message; }
+}
+
+// ---- cosine ----------------------------------------------------------------
 async function runCosine() {
   const rd = document.getElementById('cosReadout');
   try {
@@ -231,25 +367,99 @@ async function runCosine() {
       token: parseInt(document.getElementById('cosTok').value, 10)});
     drawHM('hmCos', j.matrix, diverging, 'cosReadout',
       (l,t,v) => `cos(${j.component} L${l}, L${t}) @ token ${j.token} = ${v.toFixed(4)}`);
-    rd.textContent = 'hover for values';
+    rd.innerHTML = 'hover for values' + cfTag(j);
   } catch (e) { rd.className = 'readout err'; rd.textContent = e.message; }
 }
 
+// ---- per-head ----------------------------------------------------------------
+async function runHeads() {
+  const msg = document.getElementById('phMsg');
+  msg.className = 'readout'; msg.textContent = 'decomposing…';
+  try {
+    const j = await api('/api/heads', {layer: parseInt(document.getElementById('phLayer').value,10)});
+    const mx = Math.max(...j.norms.flat());
+    drawHM('hmHeads', j.norms, v => viridis(v/mx), 'phReadout',
+      (h,t,v) => `head ${h} tok${t} ${JSON.stringify(TOKENS[t])} ‖write‖₂ = ${v.toFixed(4)}`, false);
+    msg.innerHTML = `L${j.layer}: ${j.n_heads} heads × d_head ${j.head_dim}, ` +
+      `Σheads==attn_out max diff ${j.sum_max_abs_diff.toExponential(1)}` +
+      (j.has_bias_component ? ' (+bias component)' : '') + cfTag(j);
+    document.getElementById('phLens').innerHTML =
+      `<b>per-head lens @ token ${j.token} (top-${j.head_lens[0].length}):</b><br>` +
+      j.head_lens.map((hl,h) => `h${h}: ` + hl.map(x => `${esc(x.t)} ${x.p.toFixed(4)}`).join('  ')).join('<br>');
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
+// ---- DLA ---------------------------------------------------------------------
+async function runDLA() {
+  const msg = document.getElementById('dlaMsg'), out = document.getElementById('dlaOut');
+  msg.className = 'readout'; msg.textContent = 'attributing…'; out.innerHTML = '';
+  try {
+    const j = await api('/api/dla', {token: parseInt(document.getElementById('dlaTok').value,10),
+      target: document.getElementById('dlaTarget').value});
+    const cur = j.current;
+    msg.innerHTML = `target ${esc(j.target)} @ token ${cur.token}: actual logit ${cur.actual_logit.toFixed(4)}, ` +
+      `Σ contributions ${cur.sum.toFixed(4)} (diff ${cur.sum_vs_actual_diff.toExponential(1)})` + cfTag(cur);
+    const baseMap = j.baseline ? Object.fromEntries(j.baseline.contributions.map(c => [c.component, c.contribution])) : null;
+    const rows = [...cur.contributions].sort((a,b) => Math.abs(b.contribution)-Math.abs(a.contribution)).slice(0,20);
+    out.innerHTML = '<table class="lens"><thead><tr><th>component</th><th>contribution</th>' +
+      (baseMap ? '<th>baseline</th><th>Δ</th>' : '') + '</tr></thead><tbody>' +
+      rows.map(c => `<tr><td>${esc(c.component)}</td><td>${c.contribution.toFixed(4)}</td>` +
+        (baseMap ? `<td>${(baseMap[c.component]??0).toFixed(4)}</td><td>${(c.contribution-(baseMap[c.component]??0)).toFixed(4)}</td>` : '') +
+        '</tr>').join('') + '</tbody></table><div class="muted">top 20 by |contribution|; frozen-RMS basis (see basis notes)</div>';
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
+// ---- projection ----------------------------------------------------------------
+async function runProject() {
+  const msg = document.getElementById('projMsg');
+  msg.className = 'readout'; msg.textContent = 'projecting…';
+  try {
+    let vec;
+    try { vec = JSON.parse(document.getElementById('projVec').value); }
+    catch { throw new Error('vector is not valid JSON'); }
+    const j = await api('/api/project', {vector: vec,
+      state: document.getElementById('projState').value,
+      which: document.getElementById('projWhich').value});
+    const data = j.projection[document.getElementById('projMetric').value];
+    const mx = Math.max(1e-9, ...data.flat().map(Math.abs));
+    drawHM('hmProj', data, v => diverging(v/mx), 'projReadout',
+      (l,t,v) => `proj L${l} tok${t} ${JSON.stringify(TOKENS[t])} = ${v.toFixed(4)}`);
+    msg.innerHTML = `state=${j.state} (scale ±${mx.toFixed(3)})` + cfTag(j);
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
+// ---- attention pattern -----------------------------------------------------------
+async function runPattern() {
+  const msg = document.getElementById('patMsg');
+  msg.className = 'readout'; msg.textContent = 'fetching (dedicated eager forward + restore + identity probe)…';
+  try {
+    const j = await api('/api/attn_pattern', {layer: parseInt(document.getElementById('patLayer').value,10),
+      head: parseInt(document.getElementById('patHead').value,10)});
+    drawHM('hmPat', j.map, viridis, 'patReadout',
+      (q,k,v) => `L${j.layer} h${j.head}: q=tok${q} ${JSON.stringify(TOKENS[q])} ← k=tok${k} ${JSON.stringify(TOKENS[k])}  w=${v.toFixed(4)}`, false);
+    msg.innerHTML = `L${j.layer} head ${j.head}/${j.n_heads} | rows-sum dev ${j.row_sum_max_dev.toExponential(1)} ` +
+      `| eager identity ${j.eager_identity_max_diff.toExponential(1)} ` +
+      `| post-restore identity ${j.post_restore_identity_max_diff.toExponential(1)} (${esc(j.restored_impl)} restored)` + cfTag(j);
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
+// ---- lens -------------------------------------------------------------------
 async function runLens() {
   const msg = document.getElementById('lensMsg');
   msg.className = 'readout'; msg.textContent = 'decoding all layers…';
   const state = document.getElementById('lensState').value;
+  const which = document.getElementById('lensWhich').value;
   try {
-    const j = await api('/api/lens_grid', {state});
-    msg.textContent = `state = ${j.state}`;
+    const j = await api('/api/lens_grid', {state, which});
+    msg.innerHTML = `state = ${j.state} (${j.which})` + cfTag(j);
     let h = '<table class="lens"><thead><tr><th>layer\\tok</th>';
     TOKENS.forEach((tk,i) => h += `<th title="${esc(tk)}">${i}</th>`);
     h += '</tr></thead><tbody>';
-    for (let l = j.grid.length - 1; l >= 0; l--) {   // top row = last layer
+    for (let l = j.grid.length - 1; l >= 0; l--) {
       h += `<tr><th>L${l}</th>`;
       j.grid[l].forEach((c,t) => {
         h += `<td style="background:rgba(43,95,168,${(0.15+0.85*c.p).toFixed(3)})"` +
-             ` onclick="topk('${state}',${l},${t})" title="p=${c.p}">${esc(c.t)}</td>`;
+             ` onclick="topk('${state}',${l},${t},'${which}')" title="p=${c.p}">${esc(c.t)}</td>`;
       });
       h += '</tr>';
     }
@@ -257,17 +467,26 @@ async function runLens() {
   } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
 }
 
-async function topk(state, layer, token) {
+async function topk(state, layer, token, which) {
   const el = document.getElementById('topk');
   try {
-    const j = await api('/api/lens_topk', {state, layer, token, top_k: 10});
-    el.innerHTML = `<b>top-10 — ${state} L${layer}, token ${token} ` +
-      `${esc(JSON.stringify(TOKENS[token]))}</b><br>` +
+    const j = await api('/api/lens_topk', {state, layer, token, top_k: 10, which});
+    el.innerHTML = `<b>top-10 — ${state} (${which}) L${layer}, token ${token} ` +
+      `${esc(JSON.stringify(TOKENS[token]))}</b>${cfTag(j)}<br>` +
       j.topk.map(x => `${x.p.toFixed(5)}  ${esc(x.t)}`).join('<br>');
   } catch (e) { el.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
 }
 
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// ---- export -------------------------------------------------------------------
+async function doExport() {
+  const msg = document.getElementById('capMsg');
+  try {
+    const j = await api('/api/export', {include_raw: document.getElementById('exportRaw').checked});
+    msg.className = 'readout';
+    msg.textContent = `exported → ${j.path}` + (j.raw_path ? ` (+ ${j.raw_path})` : '');
+  } catch (e) { msg.className = 'readout err'; msg.textContent = e.message; }
+}
+
 refresh().catch(e => { document.getElementById('gate').textContent = 'gate: ' + e.message; });
 </script>
 </body>
