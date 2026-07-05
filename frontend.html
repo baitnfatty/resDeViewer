@@ -51,6 +51,11 @@
 <div id="gate" class="gate-none">gate: checking&hellip;</div>
 
 <div class="panel">
+  <h2>Certified models &nbsp;<span class="muted">every selfcheck manifest on disk, validity re-checked live against current versions/code</span></h2>
+  <div id="manifestTable" class="muted">loading&hellip;</div>
+</div>
+
+<div class="panel">
   <h2>Model</h2>
   <input type="text" id="modelId" size="34" value="Qwen/Qwen3-1.7B">
   <select id="dtype"><option>float32</option><option>float16</option></select>
@@ -135,6 +140,26 @@ async function refresh() {
   const s = await api('/api/status');
   document.getElementById('basis').textContent = s.basis_notes;
   setGate(s.gate, s.model_loaded);
+  loadManifests();
+}
+
+async function loadManifests() {
+  const el = document.getElementById('manifestTable');
+  try {
+    const j = await api('/api/manifests');
+    if (!j.manifests.length) { el.textContent = 'no manifests on disk — no model is certified yet'; return; }
+    let h = '<table class="lens"><thead><tr><th>model</th><th>status</th><th>A max diff</th>' +
+            '<th>torch / transformers</th><th>reason</th></tr></thead><tbody>';
+    j.manifests.forEach(m => {
+      const col = m.status === 'valid' ? '#7fd69a' : (m.status === 'stale' ? '#e8c766' : '#f09090');
+      h += `<tr><td>${esc(m.model || m.file)}</td>` +
+           `<td style="color:${col}">${esc(m.status)}</td>` +
+           `<td>${m.A_max_abs_diff !== null && m.A_max_abs_diff !== undefined ? m.A_max_abs_diff : '—'}</td>` +
+           `<td>${esc((m.torch_version||'?') + ' / ' + (m.transformers_version||'?'))}</td>` +
+           `<td>${esc(m.reason || '')}</td></tr>`;
+    });
+    el.innerHTML = h + '</tbody></table>';
+  } catch (e) { el.textContent = 'manifest list error: ' + e.message; }
 }
 
 async function loadModel() {

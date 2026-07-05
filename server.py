@@ -32,7 +32,8 @@ from resid_viewer.capture import (  # noqa: E402
     BASIS_NOTES, ResidualCapture, component_write_norms, cross_layer_cosine,
     find_final_norm, logit_lens)
 from resid_viewer.selfcheck import (  # noqa: E402
-    DEFAULT_MODEL, IdentityCheckFailed, load_valid_manifest, validate_model)
+    DEFAULT_MODEL, MANIFEST_DIR, IdentityCheckFailed, load_valid_manifest,
+    manifest_path_for, validate_model)
 from resid_viewer.selfcheck import _encode  # noqa: E402
 
 FRONTEND = Path(__file__).resolve().parent / "frontend.html"
@@ -127,6 +128,41 @@ def status():
         "has_capture": S.cap is not None,
         "n_tokens": len(S.tokens), "n_layers": S.cap.n_layers if S.cap else None,
     }
+
+
+@app.get("/api/manifests")
+def manifests():
+    """Certification inventory: every manifest on disk with LIVE validity
+    against current torch/transformers versions and current code hashes."""
+    import json as _json
+    out = []
+    if MANIFEST_DIR.exists():
+        for p in sorted(MANIFEST_DIR.glob("*.json")):
+            try:
+                m = _json.loads(p.read_text())
+            except (ValueError, OSError) as e:
+                out.append({"file": p.name, "status": "unreadable", "reason": str(e)})
+                continue
+            model = m.get("model")
+            # Slug guard: a stray/renamed file whose name doesn't re-derive from
+            # its own model field would otherwise be listed from one file but
+            # validated against another.
+            if model is None or manifest_path_for(model).name != p.name:
+                out.append({"file": p.name, "model": model, "status": "flagged",
+                            "reason": "filename slug does not match manifest's model field"})
+                continue
+            valid, reason = load_valid_manifest(model)
+            out.append({
+                "file": p.name, "model": model,
+                "model_commit_hash": m.get("model_commit_hash"),
+                "status": "valid" if valid else "stale", "reason": reason,
+                "A_max_abs_diff": max(
+                    (c.get("A_identity_max_abs_diff", float("nan"))
+                     for c in m.get("checks", [])), default=None),
+                "torch_version": m.get("torch_version"),
+                "transformers_version": m.get("transformers_version"),
+            })
+    return {"manifests": out}
 
 
 @app.post("/api/load")
